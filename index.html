@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>人山民宿</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0d1014; color: #e8dcc8; font-family: 'Georgia', serif; }
+    #root { min-height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel (把 JSX 轉成 JS，不需本機編譯) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Firebase -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
+    import { getDatabase, ref, set, get } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAydGi-X1abExkS7qxVze9hLAbhvKUBdBY",
+      authDomain: "renshan-homestay.firebaseapp.com",
+      databaseURL: "https://renshan-homestay-default-rtdb.firebaseio.com",
+      projectId: "renshan-homestay",
+      storageBucket: "renshan-homestay.firebasestorage.app",
+      messagingSenderId: "474163821984",
+      appId: "1:474163821984:web:82ba795d1c9a5f6bb9b8c5"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
+
+    // 掛到 window 供 app.js 使用
+    window.__fbGet = async (key) => {
+      const snap = await get(ref(db, key));
+      return snap.exists() ? snap.val() : null;
+    };
+    window.__fbSet = async (key, value) => {
+      await set(ref(db, key), value);
+    };
+
+    // Firebase 準備好後才載入 app
+    window.__firebaseReady = true;
+    document.dispatchEvent(new Event("firebase-ready"));
+  </script>
+
+  <!-- App (載入時機由 firebase-ready 事件控制) -->
+  <script type="text/babel" data-type="module" src="app.js" defer></script>
+</body>
+</html>
