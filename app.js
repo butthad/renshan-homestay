@@ -1,5 +1,7 @@
 function startApp() {
 
+const { useState, useEffect } = React;
+
 // ===================== STORAGE (Firebase) =====================
 async function load(key, fallback) {
   try {
@@ -11,8 +13,11 @@ async function save(key, value) {
   try { await window.__fbSet("renshan/" + key, value); } catch(e) { console.error(e); }
 }
 
+
 // ===================== CONSTANTS =====================
 const PASSWORD_HASH = "aed9e955f35f371272a0fcd55fd4ae779e2ea63e1a589547b748d6317b41030f";
+
+// 住宿
 const FLOORS = [
   { label: "A", rooms: ["A01"] },
   { label: "B", rooms: ["B01", "B02"] },
@@ -27,85 +32,72 @@ const FLOOR_COLORS = {
   "C": { bg:"#2e1e1e", border:"#4a2e2e", accent:"#aa5a5a" },
   "D": { bg:"#2a2214", border:"#4a3a1e", accent:"#aa8a3a" },
 };
-
-// 舊房號 → 新房號 對照表（自動搬移用）
-const ROOM_MIGRATION = {
-  "101":"A01","201":"B01","202":"B02",
-  "301":"C01","302":"C02","401":"D01","402":"D02"
-};
-
-const defaultAssignments = Object.fromEntries(ROOMS.map(r => [r, []]));
-const defaultRoomConfig  = Object.fromEntries(ROOMS.map(r => [r, 2]));
+const defaultAssignments   = Object.fromEntries(ROOMS.map(r => [r, []]));
+const defaultRoomConfig    = Object.fromEntries(ROOMS.map(r => [r, 2]));
 const defaultRoomPasswords = Object.fromEntries(ROOMS.map(r => [r, ""]));
 
+// 賽事
+const RACE_GROUPS = [
+  { id: "r226",     label: "226",    sub: "個人",   color: { bg:"#1a1a2e", border:"#2a2a5a", accent:"#6a8aff" } },
+  { id: "r226R",    label: "226",    sub: "接力",   color: { bg:"#12182e", border:"#1e2850", accent:"#4a6aee" } },
+  { id: "r113",     label: "113",    sub: "個人",   color: { bg:"#1a2a1a", border:"#2a4a2a", accent:"#5aaa5a" } },
+  { id: "r113R",    label: "113",    sub: "接力",   color: { bg:"#122012", border:"#1e3a1e", accent:"#3a8a3a" } },
+  { id: "r515",     label: "515",    sub: "個人",   color: { bg:"#2a1a1a", border:"#4a2a2a", accent:"#cc6a4a" } },
+  { id: "r515R",    label: "515",    sub: "接力",   color: { bg:"#201212", border:"#3a1e1e", accent:"#aa4a3a" } },
+];
+const RACE_GROUP_IDS = RACE_GROUPS.map(g => g.id);
+const defaultRaceAssignments = Object.fromEntries(RACE_GROUP_IDS.map(id => [id, []]));
+
+// ===================== STORAGE =====================
 async function sha256(msg) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
 }
 
-// ===================== 自動搬移舊資料 =====================
-async function migrateIfNeeded(assignments) {
-  // 檢查是否有任何舊 key 存在
-  const hasOldKeys = Object.keys(ROOM_MIGRATION).some(oldKey => assignments[oldKey] !== undefined);
-  if (!hasOldKeys) return assignments;
-
-  console.log("偵測到舊房號資料，自動搬移中…");
-  const migrated = { ...defaultAssignments };
-
-  // 把舊 key 的資料搬到新 key
-  for (const [oldKey, newKey] of Object.entries(ROOM_MIGRATION)) {
-    if (assignments[oldKey] && assignments[oldKey].length > 0) {
-      migrated[newKey] = assignments[oldKey];
-    }
-  }
-  // 保留已經是新 key 的資料
-  for (const room of ROOMS) {
-    if (assignments[room] && assignments[room].length > 0) {
-      migrated[room] = assignments[room];
-    }
-  }
-
-  // 存回 Firebase
-  await save("assignments", migrated);
-  console.log("搬移完成");
-  return migrated;
-}
-
-// ===================== HOOKS =====================
-const { useState, useEffect } = React;
-
 // ===================== MAIN APP =====================
 function App() {
-  const [isAdmin, setIsAdmin]               = useState(false);
-  const [showLogin, setShowLogin]           = useState(false);
-  const [guests, setGuests]                 = useState([]);
-  const [assignments, setAssignments]       = useState(defaultAssignments);
-  const [roomConfig, setRoomConfig]         = useState(defaultRoomConfig);
-  const [roomPasswords, setRoomPasswords]   = useState(defaultRoomPasswords);
-  const [announcements, setAnnouncements]   = useState([]);
-  const [loading, setLoading]               = useState(true);
-  const [dragging, setDragging]             = useState(null);
-  const [dragOver, setDragOver]             = useState(null);
-  const [toast, setToast]                   = useState(null);
+  const [tab, setTab]                     = useState("stay"); // "stay" | "race"
+  const [isAdmin, setIsAdmin]             = useState(false);
+  const [showLogin, setShowLogin]         = useState(false);
+  const [toast, setToast]                 = useState(null);
+  const [loading, setLoading]             = useState(true);
+
+  // 住宿 state
+  const [guests, setGuests]               = useState([]);
+  const [assignments, setAssignments]     = useState(defaultAssignments);
+  const [roomConfig, setRoomConfig]       = useState(defaultRoomConfig);
+  const [roomPasswords, setRoomPasswords] = useState(defaultRoomPasswords);
+  const [announcements, setAnnouncements] = useState([]);
+  const [dragging, setDragging]           = useState(null);
+  const [dragOver, setDragOver]           = useState(null);
+
+  // 賽事 state
+  const [racers, setRacers]               = useState([]);
+  const [raceAssign, setRaceAssign]       = useState(defaultRaceAssignments);
+  const [raceDragging, setRaceDragging]   = useState(null);
+  const [raceDragOver, setRaceDragOver]   = useState(null);
 
   useEffect(() => {
     (async () => {
-      const [g, a, rc, rp, an] = await Promise.all([
+      const [g, a, rc, rp, an, racerData, raData] = await Promise.all([
         load("guests", []),
         load("assignments", defaultAssignments),
         load("roomConfig", defaultRoomConfig),
         load("roomPasswords", defaultRoomPasswords),
         load("announcements", []),
+        load("racers", []),
+        load("raceAssign", defaultRaceAssignments),
       ]);
-      const migratedA = await migrateIfNeeded(a);
-      setGuests(g); setAssignments(migratedA); setRoomConfig(rc);
+      setGuests(g); setAssignments(a); setRoomConfig(rc);
       setRoomPasswords(rp); setAnnouncements(an);
+      setRacers(racerData); setRaceAssign(raData);
       setLoading(false);
     })();
   }, []);
 
   const toast_ = (msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null),2400); };
 
+  // 住宿 actions
   const upGuests        = async g  => { setGuests(g);          await save("guests", g); };
   const upAssign        = async a  => { setAssignments(a);     await save("assignments", a); };
   const upRoomCfg       = async rc => { setRoomConfig(rc);     await save("roomConfig", rc); };
@@ -115,8 +107,7 @@ function App() {
   const assignedIds = new Set(Object.values(assignments).flat());
   const unassigned  = guests.filter(g => !assignedIds.has(g.id));
 
-  const onDragStart = (guestId, fromRoom) => setDragging({ guestId, fromRoom });
-
+  const onDragStart = (id, fromRoom) => setDragging({ guestId:id, fromRoom });
   const onDrop = async (toRoom) => {
     if (!dragging) return;
     const { guestId, fromRoom } = dragging;
@@ -131,31 +122,54 @@ function App() {
     na[toRoom] = [...(na[toRoom]||[]), guestId];
     await upAssign(na); setDragging(null); setDragOver(null);
   };
-
   const onDropUnassigned = async () => {
     if (!dragging || dragging.fromRoom === null) { setDragging(null); setDragOver(null); return; }
     const na = { ...assignments };
     na[dragging.fromRoom] = na[dragging.fromRoom].filter(id => id !== dragging.guestId);
     await upAssign(na); setDragging(null); setDragOver(null);
   };
-
   const togglePay   = async id => upGuests(guests.map(g => g.id===id ? {...g, paid:!g.paid} : g));
   const renameGuest = async (id, name) => upGuests(guests.map(g => g.id===id ? {...g, name} : g));
   const deleteGuest = async id => {
     const na = Object.fromEntries(Object.entries(assignments).map(([r,ids]) => [r, ids.filter(x=>x!==id)]));
-    await upAssign(na);
-    await upGuests(guests.filter(g => g.id !== id));
-    toast_("已刪除住客");
+    await upAssign(na); await upGuests(guests.filter(g => g.id !== id)); toast_("已刪除住客");
   };
   const updateRoomPassword = async (room, pw) => {
     const nrp = { ...roomPasswords, [room]: pw };
     await upRoomPasswords(nrp);
   };
 
+  // 賽事 actions
+  const upRacers     = async r  => { setRacers(r);      await save("racers", r); };
+  const upRaceAssign = async ra => { setRaceAssign(ra);  await save("raceAssign", ra); };
+
+  const raceAssignedIds = new Set(Object.values(raceAssign).flat());
+  const unassignedRacers = racers.filter(r => !raceAssignedIds.has(r.id));
+
+  const onRaceDragStart = (id, fromGroup) => setRaceDragging({ racerId:id, fromGroup });
+  const onRaceDrop = async (toGroup) => {
+    if (!raceDragging) return;
+    const { racerId, fromGroup } = raceDragging;
+    if (fromGroup === toGroup) { setRaceDragging(null); setRaceDragOver(null); return; }
+    const na = { ...raceAssign };
+    if (fromGroup !== null) na[fromGroup] = na[fromGroup].filter(id => id !== racerId);
+    na[toGroup] = [...(na[toGroup]||[]), racerId];
+    await upRaceAssign(na); setRaceDragging(null); setRaceDragOver(null);
+  };
+  const onRaceDropUnassigned = async () => {
+    if (!raceDragging || raceDragging.fromGroup === null) { setRaceDragging(null); setRaceDragOver(null); return; }
+    const na = { ...raceAssign };
+    na[raceDragging.fromGroup] = na[raceDragging.fromGroup].filter(id => id !== raceDragging.racerId);
+    await upRaceAssign(na); setRaceDragging(null); setRaceDragOver(null);
+  };
+  const renameRacer = async (id, name) => upRacers(racers.map(r => r.id===id ? {...r, name} : r));
+  const deleteRacer = async id => {
+    const na = Object.fromEntries(Object.entries(raceAssign).map(([g,ids]) => [g, ids.filter(x=>x!==id)]));
+    await upRaceAssign(na); await upRacers(racers.filter(r => r.id !== id)); toast_("已刪除參賽者");
+  };
+
   if (loading) return (
-    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0d1014",color:"#e8dcc8",fontSize:18}}>
-      載入中…
-    </div>
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0d1014",color:"#e8dcc8",fontSize:18,fontFamily:"serif"}}>載入中…</div>
   );
 
   return (
@@ -175,21 +189,58 @@ function App() {
             if (h === PASSWORD_HASH) { setIsAdmin(true); setShowLogin(false); toast_("歡迎，管理員！"); }
             else toast_("密碼錯誤", "err");
           }}
-          onClose={() => setShowLogin(false)}
+          onClose={() => setShowLogin(false)} />
+      )}
+
+      <div style={{maxWidth:600,margin:"0 auto",padding:"16px 12px 0"}}>
+        {/* Header */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+          <div>
+            <h1 style={{margin:0,fontSize:22,letterSpacing:3,color:"#e8dcc8"}}>人山民宿</h1>
+            <div style={{color:"#7a6a5a",fontSize:11,marginTop:1,fontFamily:"sans-serif"}}>RENSHAN HOMESTAY · 4/23–4/24</div>
+          </div>
+          {isAdmin
+            ? <button onClick={()=>{ setIsAdmin(false); toast_("已登出"); }} style={smallBtn("#2a2030","#9a7aba")}>登出</button>
+            : <button onClick={()=>setShowLogin(true)} style={smallBtn("#1a1e2a","#7a6a9a")}>管理員</button>
+          }
+        </div>
+
+        {/* Tab switcher */}
+        <div style={{display:"flex",gap:4,marginBottom:16,background:"#141020",borderRadius:12,padding:4}}>
+          {[["stay","🏠 住宿分配"],["race","🏊 賽事分組"]].map(([key,label])=>(
+            <button key={key} onClick={()=>setTab(key)} style={{
+              flex:1,padding:"9px 0",borderRadius:9,border:"none",cursor:"pointer",fontSize:13,
+              background:tab===key?"#6b5b95":"transparent",
+              color:tab===key?"#fff":"#7a6a9a",
+              fontFamily:"sans-serif",fontWeight:tab===key?700:400,transition:"all 0.18s"
+            }}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tab content */}
+      {tab === "stay" ? (
+        <StayBoard
+          isAdmin={isAdmin} guests={guests} assignments={assignments}
+          roomConfig={roomConfig} roomPasswords={roomPasswords} announcements={announcements}
+          unassigned={unassigned} dragging={dragging} dragOver={dragOver}
+          setDragOver={setDragOver} onDragStart={onDragStart}
+          onDrop={onDrop} onDropUnassigned={onDropUnassigned}
+          togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest}
+          upGuests={upGuests} upRoomCfg={upRoomCfg} upAnnounce={upAnnounce}
+          updateRoomPassword={updateRoomPassword} toast_={toast_}
+        />
+      ) : (
+        <RaceBoard
+          isAdmin={isAdmin} racers={racers} raceAssign={raceAssign}
+          unassignedRacers={unassignedRacers}
+          raceDragging={raceDragging} raceDragOver={raceDragOver} setRaceDragOver={setRaceDragOver}
+          onRaceDragStart={onRaceDragStart} onRaceDrop={onRaceDrop}
+          onRaceDropUnassigned={onRaceDropUnassigned}
+          renameRacer={renameRacer} deleteRacer={deleteRacer}
+          upRacers={upRacers} toast_={toast_}
         />
       )}
-      <Board
-        isAdmin={isAdmin} guests={guests} assignments={assignments}
-        roomConfig={roomConfig} roomPasswords={roomPasswords} announcements={announcements}
-        unassigned={unassigned} dragging={dragging} dragOver={dragOver}
-        setDragOver={setDragOver} onDragStart={onDragStart}
-        onDrop={onDrop} onDropUnassigned={onDropUnassigned}
-        togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest}
-        upGuests={upGuests} upRoomCfg={upRoomCfg} upAnnounce={upAnnounce}
-        updateRoomPassword={updateRoomPassword} toast_={toast_}
-        onAdminLogin={() => setShowLogin(true)}
-        onAdminLogout={() => { setIsAdmin(false); toast_("已登出"); }}
-      />
     </div>
   );
 }
@@ -198,18 +249,13 @@ function App() {
 function LoginModal({ onLogin, onClose }) {
   const [pw, setPw] = useState("");
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",display:"flex",
-      alignItems:"center",justifyContent:"center",zIndex:2000,padding:20}}>
-      <div style={{background:"#1a1e2a",border:"1px solid #3a3050",borderRadius:16,
-        padding:"36px 28px",width:"100%",maxWidth:340,textAlign:"center"}}>
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:20}}>
+      <div style={{background:"#1a1e2a",border:"1px solid #3a3050",borderRadius:16,padding:"36px 28px",width:"100%",maxWidth:340,textAlign:"center"}}>
         <div style={{fontSize:28,marginBottom:6}}>🔑</div>
         <div style={{fontFamily:"sans-serif",color:"#a09080",fontSize:13,marginBottom:20}}>人山民宿 管理員登入</div>
         <input type="password" placeholder="請輸入密碼" value={pw}
-          onChange={e=>setPw(e.target.value)}
-          onKeyDown={e=>e.key==="Enter"&&onLogin(pw)}
-          style={{width:"100%",padding:"11px 14px",borderRadius:8,border:"1px solid #3a3050",
-            background:"#0d1014",color:"#e8dcc8",fontSize:15,marginBottom:14,
-            boxSizing:"border-box",outline:"none"}}
+          onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==="Enter"&&onLogin(pw)}
+          style={{width:"100%",padding:"11px 14px",borderRadius:8,border:"1px solid #3a3050",background:"#0d1014",color:"#e8dcc8",fontSize:15,marginBottom:14,boxSizing:"border-box",outline:"none"}}
           autoFocus />
         <div style={{display:"flex",gap:8}}>
           <Btn onClick={()=>onLogin(pw)} color="#6b5b95" label="確認登入" />
@@ -220,26 +266,16 @@ function LoginModal({ onLogin, onClose }) {
   );
 }
 
-// ===================== BOARD =====================
-function Board({ isAdmin, guests, assignments, roomConfig, roomPasswords, announcements,
+// ===================== STAY BOARD =====================
+function StayBoard({ isAdmin, guests, assignments, roomConfig, roomPasswords, announcements,
   unassigned, dragging, dragOver, setDragOver, onDragStart, onDrop, onDropUnassigned,
   togglePay, deleteGuest, renameGuest, upGuests, upRoomCfg, upAnnounce,
-  updateRoomPassword, toast_, onAdminLogin, onAdminLogout }) {
+  updateRoomPassword, toast_ }) {
   const [showAddGuest, setShowAddGuest] = useState(false);
   const [showAnnounce, setShowAnnounce] = useState(false);
   const [showRoomCfg,  setShowRoomCfg]  = useState(false);
   return (
-    <div style={{maxWidth:600,margin:"0 auto",padding:"16px 12px 48px"}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-        <div>
-          <h1 style={{margin:0,fontSize:22,letterSpacing:3,color:"#e8dcc8"}}>人山民宿</h1>
-          <div style={{color:"#7a6a5a",fontSize:11,marginTop:1,fontFamily:"sans-serif"}}>RENSHAN HOMESTAY · 4/23–4/24</div>
-        </div>
-        {isAdmin
-          ? <button onClick={onAdminLogout} style={smallBtn("#2a2030","#9a7aba")}>登出</button>
-          : <button onClick={onAdminLogin}  style={smallBtn("#1a1e2a","#7a6a9a")}>管理員</button>
-        }
-      </div>
+    <div style={{maxWidth:600,margin:"0 auto",padding:"0 12px 48px"}}>
       {isAdmin && (
         <div style={{display:"flex",gap:8,marginBottom:14}}>
           <ActionBtn onClick={()=>setShowAddGuest(true)} icon="＋" label="新增住客" color="#4a6a4a" />
@@ -248,30 +284,23 @@ function Board({ isAdmin, guests, assignments, roomConfig, roomPasswords, announ
         </div>
       )}
       {announcements.length > 0 && <AnnounceBanner announcements={announcements} />}
-      <UnassignedPool
-        guests={unassigned} isAdmin={isAdmin} dragging={dragging} dragOver={dragOver}
-        setDragOver={setDragOver} onDragStart={onDragStart}
-        onDropUnassigned={onDropUnassigned} togglePay={togglePay}
-        deleteGuest={deleteGuest} renameGuest={renameGuest}
-      />
+      <UnassignedPool guests={unassigned} isAdmin={isAdmin} dragging={dragging} dragOver={dragOver}
+        setDragOver={setDragOver} onDragStart={onDragStart} onDropUnassigned={onDropUnassigned}
+        togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest}
+        label="待分配住客" dragOverKey="unassigned" />
       <div style={{display:"flex",flexDirection:"column",gap:10}}>
         {FLOORS.map(floor => (
-          <FloorRow key={floor.label} floor={floor}
-            assignments={assignments} guests={guests} roomConfig={roomConfig}
-            roomPasswords={roomPasswords} isAdmin={isAdmin}
+          <FloorRow key={floor.label} floor={floor} assignments={assignments} guests={guests}
+            roomConfig={roomConfig} roomPasswords={roomPasswords} isAdmin={isAdmin}
             dragging={dragging} dragOver={dragOver} setDragOver={setDragOver}
             onDragStart={onDragStart} onDrop={onDrop}
             togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest}
-            updateRoomPassword={updateRoomPassword}
-          />
+            updateRoomPassword={updateRoomPassword} />
         ))}
       </div>
       {showAddGuest && (
-        <AddGuestModal onClose={()=>setShowAddGuest(false)}
-          onAdd={async name => {
-            await upGuests([...guests, {id:`g_${Date.now()}`,name,paid:false}]);
-            toast_(`已新增：${name}`); setShowAddGuest(false);
-          }} />
+        <AddModal title="新增住客" placeholder="住客姓名" onClose={()=>setShowAddGuest(false)}
+          onAdd={async name => { await upGuests([...guests,{id:`g_${Date.now()}`,name,paid:false}]); toast_(`已新增：${name}`); setShowAddGuest(false); }} />
       )}
       {showAnnounce && (
         <AnnounceModal announcements={announcements} onClose={()=>setShowAnnounce(false)}
@@ -282,6 +311,179 @@ function Board({ isAdmin, guests, assignments, roomConfig, roomPasswords, announ
           onSave={async rc => { await upRoomCfg(rc); toast_("房型設定已更新"); setShowRoomCfg(false); }} />
       )}
     </div>
+  );
+}
+
+// ===================== RACE BOARD =====================
+function RaceBoard({ isAdmin, racers, raceAssign, unassignedRacers,
+  raceDragging, raceDragOver, setRaceDragOver,
+  onRaceDragStart, onRaceDrop, onRaceDropUnassigned,
+  renameRacer, deleteRacer, upRacers, toast_ }) {
+  const [showAdd, setShowAdd] = useState(false);
+
+  return (
+    <div style={{maxWidth:600,margin:"0 auto",padding:"0 12px 48px"}}>
+      {isAdmin && (
+        <div style={{display:"flex",gap:8,marginBottom:14}}>
+          <ActionBtn onClick={()=>setShowAdd(true)} icon="＋" label="新增參賽者" color="#2a4a6a" />
+        </div>
+      )}
+
+      {/* 未分配參賽者 */}
+      <div
+        onDragOver={e=>{ if(isAdmin){e.preventDefault();setRaceDragOver("race_unassigned");}}}
+        onDragLeave={()=>setRaceDragOver(null)}
+        onDrop={()=>{ if(isAdmin) onRaceDropUnassigned(); }}
+        style={{
+          background:raceDragOver==="race_unassigned"?"#1e1a30":"#141020",
+          border:`1px solid ${raceDragOver==="race_unassigned"?"#6b5b95":"#221830"}`,
+          borderRadius:12,padding:"10px 12px",marginBottom:12,transition:"all 0.18s"
+        }}>
+        <div style={{fontFamily:"sans-serif",color:"#6090b0",fontSize:12,fontWeight:700,marginBottom:8,letterSpacing:1}}>
+          待分組參賽者 <span style={{color:"#405070",fontWeight:400}}>({unassignedRacers.length}人/組)</span>
+        </div>
+        {unassignedRacers.length===0 ? (
+          <div style={{color:"#2e2040",fontFamily:"sans-serif",fontSize:12,textAlign:"center",padding:"8px 0"}}>
+            {isAdmin?"可從組別拖回":"所有人已分組"}
+          </div>
+        ) : (
+          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            {unassignedRacers.map(r => (
+              <RacerCard key={r.id} racer={r} isAdmin={isAdmin} fromGroup={null}
+                onDragStart={onRaceDragStart} renameRacer={renameRacer} deleteRacer={deleteRacer} inline />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 6 個組別，226/113/515 各一列 */}
+      {[["226","r226","r226R"],["113","r113","r113R"],["515","r515","r515R"]].map(([dist, indId, relId]) => {
+        const indGroup = RACE_GROUPS.find(g=>g.id===indId);
+        const relGroup = RACE_GROUPS.find(g=>g.id===relId);
+        return (
+          <div key={dist} style={{marginBottom:10}}>
+            {/* 距離標籤 */}
+            <div style={{fontFamily:"sans-serif",fontSize:11,color:"#5a5070",marginBottom:6,letterSpacing:2,paddingLeft:2}}>
+              ── Challenge Taiwan {dist} ──
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <RaceGroupCard group={indGroup} racerIds={raceAssign[indId]||[]} racers={racers}
+                isAdmin={isAdmin} dragging={raceDragging} dragOver={raceDragOver} setDragOver={setRaceDragOver}
+                onDragStart={onRaceDragStart} onDrop={onRaceDrop}
+                renameRacer={renameRacer} deleteRacer={deleteRacer} />
+              <RaceGroupCard group={relGroup} racerIds={raceAssign[relId]||[]} racers={racers}
+                isAdmin={isAdmin} dragging={raceDragging} dragOver={raceDragOver} setDragOver={setRaceDragOver}
+                onDragStart={onRaceDragStart} onDrop={onRaceDrop}
+                renameRacer={renameRacer} deleteRacer={deleteRacer} />
+            </div>
+          </div>
+        );
+      })}
+
+      {showAdd && (
+        <AddModal title="新增參賽者／隊伍" placeholder="姓名或隊名" onClose={()=>setShowAdd(false)}
+          onAdd={async name => { await upRacers([...racers,{id:`racer_${Date.now()}`,name}]); toast_(`已新增：${name}`); setShowAdd(false); }} />
+      )}
+    </div>
+  );
+}
+
+// ===================== RACE GROUP CARD =====================
+function RaceGroupCard({ group, racerIds, racers, isAdmin, dragging, dragOver, setDragOver, onDragStart, onDrop, renameRacer, deleteRacer }) {
+  const groupRacers = racerIds.map(id => racers.find(r=>r.id===id)).filter(Boolean);
+  const isTarget = dragOver === `racegroup_${group.id}`;
+  const { bg, border, accent } = group.color;
+  return (
+    <div
+      onDragOver={e=>{ if(isAdmin){e.preventDefault();setDragOver(`racegroup_${group.id}`);}}}
+      onDragLeave={()=>setDragOver(null)}
+      onDrop={()=>{ if(isAdmin) onDrop(group.id); }}
+      style={{background:isTarget?"rgba(107,91,149,0.18)":bg,border:`1px solid ${isTarget?"#6b5b95":border}`,
+        borderRadius:12,overflow:"hidden",transition:"all 0.15s"}}>
+      {/* 組別 header */}
+      <div style={{padding:"8px 12px",borderBottom:`1px solid ${border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontFamily:"sans-serif",fontWeight:700,fontSize:16,color:accent}}>{group.label}</span>
+          <span style={{fontFamily:"sans-serif",fontSize:11,color:"#5a5070",background:"rgba(0,0,0,0.3)",padding:"1px 7px",borderRadius:8}}>{group.sub}</span>
+        </div>
+        <span style={{fontFamily:"sans-serif",fontSize:11,color:"#5a6080"}}>{groupRacers.length}人</span>
+      </div>
+      {/* 參賽者列表 */}
+      <div style={{padding:10,display:"flex",flexDirection:"column",gap:5,minHeight:60}}>
+        {groupRacers.map(r => (
+          <RacerCard key={r.id} racer={r} isAdmin={isAdmin} fromGroup={group.id}
+            onDragStart={onDragStart} renameRacer={renameRacer} deleteRacer={deleteRacer} />
+        ))}
+        {groupRacers.length===0 && (
+          <div style={{textAlign:"center",color:"#2e2e3e",fontFamily:"sans-serif",fontSize:12,padding:"8px 0"}}>
+            {isAdmin?"拖曳至此":"—"}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ===================== RACER CARD =====================
+function RacerCard({ racer, isAdmin, fromGroup, onDragStart, renameRacer, deleteRacer, inline }) {
+  const [sheet, setSheet]           = useState(false);
+  const [renaming, setRenaming]     = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [newName, setNewName]       = useState(racer.name);
+
+  const openSheet  = (e) => { if(!isAdmin) return; e.stopPropagation(); setNewName(racer.name); setRenaming(false); setConfirming(false); setSheet(true); };
+  const closeSheet = () => { setSheet(false); setRenaming(false); setConfirming(false); };
+  const handleRename = async () => { if(newName.trim()&&newName.trim()!==racer.name) await renameRacer(racer.id,newName.trim()); closeSheet(); };
+  const handleDelete = async () => { await deleteRacer(racer.id); closeSheet(); };
+
+  return (
+    <>
+      <div draggable={isAdmin&&!sheet} onDragStart={()=>isAdmin&&!sheet&&onDragStart(racer.id,fromGroup)}
+        onClick={openSheet}
+        style={{background:"rgba(0,0,0,0.35)",border:"1px solid #2a2a3a",borderRadius:7,
+          padding:inline?"5px 8px":"6px 9px",cursor:isAdmin?"pointer":"default",
+          display:"flex",alignItems:"center",gap:5,userSelect:"none",flexShrink:0,
+          WebkitTapHighlightColor:"transparent"}}>
+        <span style={{fontSize:12}}>🏅</span>
+        <span style={{fontFamily:"sans-serif",fontSize:12,color:"#d0c8e8",flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+          {racer.name}
+        </span>
+      </div>
+
+      {sheet && (
+        <div onClick={closeSheet} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:3000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:"#1a1e2a",border:"1px solid #3a3050",borderRadius:"16px 16px 0 0",padding:"20px 20px 36px",width:"100%",maxWidth:480}}>
+            <div style={{fontFamily:"sans-serif",fontSize:15,fontWeight:700,color:"#e8dcc8",marginBottom:16,textAlign:"center"}}>{racer.name}</div>
+            {renaming ? (
+              <div>
+                <input autoFocus value={newName} onChange={e=>setNewName(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&handleRename()}
+                  style={{...iStyle,marginBottom:12}} placeholder="輸入新名稱" />
+                <div style={{display:"flex",gap:8}}>
+                  <Btn onClick={handleRename} color="#6b5b95" label="確認改名" />
+                  <Btn onClick={()=>setRenaming(false)} color="#2a2a3a" label="取消" />
+                </div>
+              </div>
+            ) : confirming ? (
+              <div>
+                <div style={{fontFamily:"sans-serif",fontSize:14,color:"#e05a5a",textAlign:"center",marginBottom:16}}>確定要刪除「{racer.name}」？</div>
+                <div style={{display:"flex",gap:8}}>
+                  <Btn onClick={handleDelete} color="#7f1d1d" label="確定刪除" />
+                  <Btn onClick={()=>setConfirming(false)} color="#2a2a3a" label="取消" />
+                </div>
+              </div>
+            ) : (
+              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                <button onClick={()=>setRenaming(true)} style={{...sheetBtn,background:"#1e1e2e",color:"#9090e0"}}>✏️ 更改名稱</button>
+                <button onClick={()=>setConfirming(true)} style={{...sheetBtn,background:"#2a1a1a",color:"#e05a5a"}}>🗑 刪除</button>
+                <button onClick={closeSheet} style={{...sheetBtn,background:"#141414",color:"#6a6a6a",marginTop:4}}>取消</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -298,15 +500,13 @@ function FloorRow({ floor, assignments, guests, roomConfig, roomPasswords, isAdm
       </div>
       <div style={{display:"grid",gridTemplateColumns:`repeat(${floor.rooms.length},1fr)`}}>
         {floor.rooms.map((room,i) => (
-          <RoomCard key={room} room={room}
-            capacity={roomConfig[room]||2} guestIds={assignments[room]||[]}
-            password={roomPasswords[room]||""}
+          <RoomCard key={room} room={room} capacity={roomConfig[room]||2}
+            guestIds={assignments[room]||[]} password={roomPasswords[room]||""}
             guests={guests} isAdmin={isAdmin}
             dragging={dragging} dragOver={dragOver} setDragOver={setDragOver}
             onDragStart={onDragStart} onDrop={onDrop}
             togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest}
-            updateRoomPassword={updateRoomPassword}
-            borderLeft={i>0} />
+            updateRoomPassword={updateRoomPassword} borderLeft={i>0} />
         ))}
       </div>
     </div>
@@ -317,27 +517,18 @@ function FloorRow({ floor, assignments, guests, roomConfig, roomPasswords, isAdm
 function RoomCard({ room, capacity, guestIds, guests, password, isAdmin,
   dragging, dragOver, setDragOver, onDragStart, onDrop,
   togglePay, deleteGuest, renameGuest, updateRoomPassword, borderLeft }) {
-  const roomGuests  = guestIds.map(id => guests.find(g=>g.id===id)).filter(Boolean);
-  const isFull      = roomGuests.length >= capacity;
-  const isTarget    = dragOver === `room_${room}`;
+  const roomGuests = guestIds.map(id => guests.find(g=>g.id===id)).filter(Boolean);
+  const isFull     = roomGuests.length >= capacity;
+  const isTarget   = dragOver === `room_${room}`;
   const [editingPw, setEditingPw] = useState(false);
   const [pwDraft,   setPwDraft]   = useState(password);
-
-  const savePw = async () => {
-    await updateRoomPassword(room, pwDraft.trim());
-    setEditingPw(false);
-  };
-
+  const savePw = async () => { await updateRoomPassword(room, pwDraft.trim()); setEditingPw(false); };
   return (
-    <div
-      onDragOver={e=>{ if(isAdmin){e.preventDefault();setDragOver(`room_${room}`);}}}
-      onDragLeave={()=>setDragOver(null)}
-      onDrop={()=>{ if(isAdmin) onDrop(room); }}
+    <div onDragOver={e=>{ if(isAdmin){e.preventDefault();setDragOver(`room_${room}`);}}}
+      onDragLeave={()=>setDragOver(null)} onDrop={()=>{ if(isAdmin) onDrop(room); }}
       style={{padding:10,minHeight:90,boxSizing:"border-box",
         borderLeft:borderLeft?"1px solid rgba(255,255,255,0.06)":"none",
         background:isTarget?"rgba(107,91,149,0.2)":"transparent",transition:"background 0.15s"}}>
-
-      {/* 房號 + 人數 */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
         <div style={{display:"flex",alignItems:"center",gap:6}}>
           <span style={{fontFamily:"sans-serif",fontWeight:700,fontSize:15,color:"#e8dcc8"}}>{room}</span>
@@ -345,52 +536,35 @@ function RoomCard({ room, capacity, guestIds, guests, password, isAdmin,
             {ROOM_TYPES[capacity]||`${capacity}人`}
           </span>
         </div>
-        <span style={{fontFamily:"sans-serif",fontSize:11,color:isFull?"#c45a5a":"#5a8a5a"}}>
-          {roomGuests.length}/{capacity}
-        </span>
+        <span style={{fontFamily:"sans-serif",fontSize:11,color:isFull?"#c45a5a":"#5a8a5a"}}>{roomGuests.length}/{capacity}</span>
       </div>
-
-      {/* 房間密碼（僅管理員可見） */}
       {isAdmin && (
         <div style={{marginBottom:7}}>
           {editingPw ? (
             <div style={{display:"flex",gap:4,alignItems:"center"}}>
-              <input
-                autoFocus value={pwDraft}
-                onChange={e=>setPwDraft(e.target.value)}
+              <input autoFocus value={pwDraft} onChange={e=>setPwDraft(e.target.value)}
                 onKeyDown={e=>{ if(e.key==="Enter") savePw(); if(e.key==="Escape") setEditingPw(false); }}
                 placeholder="房間密碼"
-                style={{flex:1,padding:"3px 7px",borderRadius:5,border:"1px solid #3a3050",
-                  background:"#0d1014",color:"#e8dcc8",fontSize:11,fontFamily:"sans-serif",outline:"none"}}
-              />
-              <button onClick={savePw}
-                style={{...tinyBtn,background:"#2a4a2a",color:"#5ae05a",fontSize:10}}>✓</button>
-              <button onClick={()=>setEditingPw(false)}
-                style={{...tinyBtn,background:"#2a2a3a",fontSize:10}}>✕</button>
+                style={{flex:1,padding:"3px 7px",borderRadius:5,border:"1px solid #3a3050",background:"#0d1014",color:"#e8dcc8",fontSize:11,fontFamily:"sans-serif",outline:"none"}} />
+              <button onClick={savePw} style={{...tinyBtn,background:"#2a4a2a",color:"#5ae05a",fontSize:10}}>✓</button>
+              <button onClick={()=>setEditingPw(false)} style={{...tinyBtn,fontSize:10}}>✕</button>
             </div>
           ) : (
             <div onClick={()=>{ setPwDraft(password); setEditingPw(true); }}
-              style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",
-                padding:"2px 6px",borderRadius:5,border:"1px dashed #2a2a3a",
-                background:"rgba(0,0,0,0.2)"}}>
+              style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",padding:"2px 6px",borderRadius:5,border:"1px dashed #2a2a3a",background:"rgba(0,0,0,0.2)"}}>
               <span style={{fontSize:10,color:"#5a4a6a",fontFamily:"sans-serif"}}>🔒</span>
-              <span style={{fontFamily:"sans-serif",fontSize:11,
-                color: password ? "#9080c0" : "#3a2a4a",
-                fontStyle: password ? "normal" : "italic"}}>
-                {password || "點擊設定密碼"}
+              <span style={{fontFamily:"sans-serif",fontSize:11,color:password?"#9080c0":"#3a2a4a",fontStyle:password?"normal":"italic"}}>
+                {password||"點擊設定密碼"}
               </span>
               {password && <span style={{fontSize:9,color:"#4a3a5a",fontFamily:"sans-serif",marginLeft:"auto"}}>✏️</span>}
             </div>
           )}
         </div>
       )}
-
-      {/* 住客列表 */}
       <div style={{display:"flex",flexDirection:"column",gap:5}}>
         {roomGuests.map(g => (
           <GuestCard key={g.id} guest={g} isAdmin={isAdmin} fromRoom={room}
-            onDragStart={onDragStart} togglePay={togglePay}
-            deleteGuest={deleteGuest} renameGuest={renameGuest} />
+            onDragStart={onDragStart} togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest} />
         ))}
         {roomGuests.length===0 && (
           <div style={{textAlign:"center",color:"#2e2e3e",fontFamily:"sans-serif",fontSize:12,padding:"8px 0"}}>
@@ -407,13 +581,9 @@ function UnassignedPool({ guests, isAdmin, dragging, dragOver, setDragOver,
   onDragStart, onDropUnassigned, togglePay, deleteGuest, renameGuest }) {
   const isTarget = dragOver === "unassigned";
   return (
-    <div
-      onDragOver={e=>{ if(isAdmin){e.preventDefault();setDragOver("unassigned");}}}
-      onDragLeave={()=>setDragOver(null)}
-      onDrop={()=>{ if(isAdmin) onDropUnassigned(); }}
-      style={{background:isTarget?"#2a1e3a":"#141020",
-        border:`1px solid ${isTarget?"#6b5b95":"#221830"}`,
-        borderRadius:12,padding:"10px 12px",marginBottom:12,transition:"all 0.18s"}}>
+    <div onDragOver={e=>{ if(isAdmin){e.preventDefault();setDragOver("unassigned");}}}
+      onDragLeave={()=>setDragOver(null)} onDrop={()=>{ if(isAdmin) onDropUnassigned(); }}
+      style={{background:isTarget?"#2a1e3a":"#141020",border:`1px solid ${isTarget?"#6b5b95":"#221830"}`,borderRadius:12,padding:"10px 12px",marginBottom:12,transition:"all 0.18s"}}>
       <div style={{fontFamily:"sans-serif",color:"#9070b0",fontSize:12,fontWeight:700,marginBottom:8,letterSpacing:1}}>
         待分配住客 <span style={{color:"#6a5080",fontWeight:400}}>({guests.length}人)</span>
       </div>
@@ -425,8 +595,7 @@ function UnassignedPool({ guests, isAdmin, dragging, dragOver, setDragOver,
         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
           {guests.map(g => (
             <GuestCard key={g.id} guest={g} isAdmin={isAdmin} fromRoom={null}
-              onDragStart={onDragStart} togglePay={togglePay}
-              deleteGuest={deleteGuest} renameGuest={renameGuest} inline />
+              onDragStart={onDragStart} togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest} inline />
           ))}
         </div>
       )}
@@ -440,65 +609,41 @@ function GuestCard({ guest, isAdmin, fromRoom, onDragStart, togglePay, deleteGue
   const [renaming, setRenaming]     = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [newName, setNewName]       = useState(guest.name);
-
-  const openSheet = (e) => {
-    if (!isAdmin) return;
-    e.stopPropagation();
-    setNewName(guest.name); setRenaming(false); setConfirming(false); setSheet(true);
-  };
+  const openSheet  = (e) => { if(!isAdmin) return; e.stopPropagation(); setNewName(guest.name); setRenaming(false); setConfirming(false); setSheet(true); };
   const closeSheet = () => { setSheet(false); setRenaming(false); setConfirming(false); };
-  const handleRename = async () => {
-    if (newName.trim() && newName.trim() !== guest.name) await renameGuest(guest.id, newName.trim());
-    closeSheet();
-  };
+  const handleRename = async () => { if(newName.trim()&&newName.trim()!==guest.name) await renameGuest(guest.id,newName.trim()); closeSheet(); };
   const handleDelete = async () => { await deleteGuest(guest.id); closeSheet(); };
-
   return (
     <>
-      <div draggable={isAdmin && !sheet}
-        onDragStart={()=>isAdmin && !sheet && onDragStart(guest.id, fromRoom)}
+      <div draggable={isAdmin&&!sheet} onDragStart={()=>isAdmin&&!sheet&&onDragStart(guest.id,fromRoom)}
         onClick={openSheet}
-        style={{background:"rgba(0,0,0,0.35)",
-          border:`1px solid ${guest.paid?"#2a4a2a":"#3a2a2a"}`,borderRadius:7,
+        style={{background:"rgba(0,0,0,0.35)",border:`1px solid ${guest.paid?"#2a4a2a":"#3a2a2a"}`,borderRadius:7,
           padding:inline?"5px 8px":"6px 9px",cursor:isAdmin?"pointer":"default",
-          display:"flex",alignItems:"center",gap:5,userSelect:"none",flexShrink:0,
-          WebkitTapHighlightColor:"transparent"}}>
+          display:"flex",alignItems:"center",gap:5,userSelect:"none",flexShrink:0,WebkitTapHighlightColor:"transparent"}}>
         <div style={{width:7,height:7,borderRadius:"50%",flexShrink:0,background:guest.paid?"#4a9a4a":"#9a4a4a"}} />
-        <span style={{fontFamily:"sans-serif",fontSize:12,color:"#e0d0c0",flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-          {guest.name}
-        </span>
-        <span style={{fontFamily:"sans-serif",fontSize:10,color:guest.paid?"#4a8a4a":"#8a4a4a",flexShrink:0}}>
-          {guest.paid?"已繳":"未繳"}
-        </span>
+        <span style={{fontFamily:"sans-serif",fontSize:12,color:"#e0d0c0",flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{guest.name}</span>
+        <span style={{fontFamily:"sans-serif",fontSize:10,color:guest.paid?"#4a8a4a":"#8a4a4a",flexShrink:0}}>{guest.paid?"已繳":"未繳"}</span>
       </div>
-
       {sheet && (
-        <div onClick={closeSheet}
-          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:3000,
-            display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+        <div onClick={closeSheet} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:3000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
           <div onClick={e=>e.stopPropagation()}
-            style={{background:"#1a1e2a",border:"1px solid #3a3050",
-              borderRadius:"16px 16px 0 0",padding:"20px 20px 36px",width:"100%",maxWidth:480}}>
-            <div style={{fontFamily:"sans-serif",fontSize:15,fontWeight:700,color:"#e8dcc8",marginBottom:16,textAlign:"center"}}>
-              {guest.name}
-            </div>
+            style={{background:"#1a1e2a",border:"1px solid #3a3050",borderRadius:"16px 16px 0 0",padding:"20px 20px 36px",width:"100%",maxWidth:480}}>
+            <div style={{fontFamily:"sans-serif",fontSize:15,fontWeight:700,color:"#e8dcc8",marginBottom:16,textAlign:"center"}}>{guest.name}</div>
             {renaming ? (
               <div>
                 <input autoFocus value={newName} onChange={e=>setNewName(e.target.value)}
                   onKeyDown={e=>e.key==="Enter"&&handleRename()}
                   style={{...iStyle,marginBottom:12}} placeholder="輸入新名稱" />
                 <div style={{display:"flex",gap:8}}>
-                  <Btn onClick={handleRename}           color="#6b5b95" label="確認改名" />
+                  <Btn onClick={handleRename} color="#6b5b95" label="確認改名" />
                   <Btn onClick={()=>setRenaming(false)} color="#2a2a3a" label="取消" />
                 </div>
               </div>
             ) : confirming ? (
               <div>
-                <div style={{fontFamily:"sans-serif",fontSize:14,color:"#e05a5a",textAlign:"center",marginBottom:16}}>
-                  確定要刪除「{guest.name}」？
-                </div>
+                <div style={{fontFamily:"sans-serif",fontSize:14,color:"#e05a5a",textAlign:"center",marginBottom:16}}>確定要刪除「{guest.name}」？</div>
                 <div style={{display:"flex",gap:8}}>
-                  <Btn onClick={handleDelete}             color="#7f1d1d" label="確定刪除" />
+                  <Btn onClick={handleDelete} color="#7f1d1d" label="確定刪除" />
                   <Btn onClick={()=>setConfirming(false)} color="#2a2a3a" label="取消" />
                 </div>
               </div>
@@ -508,15 +653,9 @@ function GuestCard({ guest, isAdmin, fromRoom, onDragStart, togglePay, deleteGue
                   style={{...sheetBtn,background:guest.paid?"#2a1a1a":"#1a2a1a",color:guest.paid?"#e05a5a":"#5ae05a"}}>
                   {guest.paid?"✗ 標記為未繳費":"✓ 標記為已繳費"}
                 </button>
-                <button onClick={()=>setRenaming(true)} style={{...sheetBtn,background:"#1e1e2e",color:"#9090e0"}}>
-                  ✏️ 更改姓名
-                </button>
-                <button onClick={()=>setConfirming(true)} style={{...sheetBtn,background:"#2a1a1a",color:"#e05a5a"}}>
-                  🗑 刪除住客
-                </button>
-                <button onClick={closeSheet} style={{...sheetBtn,background:"#141414",color:"#6a6a6a",marginTop:4}}>
-                  取消
-                </button>
+                <button onClick={()=>setRenaming(true)} style={{...sheetBtn,background:"#1e1e2e",color:"#9090e0"}}>✏️ 更改姓名</button>
+                <button onClick={()=>setConfirming(true)} style={{...sheetBtn,background:"#2a1a1a",color:"#e05a5a"}}>🗑 刪除住客</button>
+                <button onClick={closeSheet} style={{...sheetBtn,background:"#141414",color:"#6a6a6a",marginTop:4}}>取消</button>
               </div>
             )}
           </div>
@@ -533,8 +672,7 @@ function AnnounceBanner({ announcements }) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{background:"#181410",border:"1px solid #3a2e10",borderRadius:12,marginBottom:12,overflow:"hidden"}}>
-      <div onClick={()=>setOpen(o=>!o)}
-        style={{padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+      <div onClick={()=>setOpen(o=>!o)} style={{padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <span style={{fontFamily:"sans-serif",color:"#c4a96b",fontWeight:700,fontSize:13}}>📋 公佈欄 · {announcements.length}則</span>
         <span style={{color:"#7a6a3a",fontSize:12}}>{open?"▲":"▼"}</span>
       </div>
@@ -552,14 +690,13 @@ function AnnounceBanner({ announcements }) {
   );
 }
 
-// ===================== ADD GUEST MODAL =====================
-function AddGuestModal({ onClose, onAdd }) {
+// ===================== ADD MODAL (共用) =====================
+function AddModal({ title, placeholder, onClose, onAdd }) {
   const [name, setName] = useState("");
   return (
-    <Modal title="新增住客" onClose={onClose}>
-      <input autoFocus placeholder="住客姓名" value={name}
-        onChange={e=>setName(e.target.value)}
-        onKeyDown={e=>e.key==="Enter"&&name.trim()&&onAdd(name.trim())}
+    <Modal title={title} onClose={onClose}>
+      <input autoFocus placeholder={placeholder} value={name}
+        onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&name.trim()&&onAdd(name.trim())}
         style={iStyle} />
       <div style={{display:"flex",gap:8,marginTop:14}}>
         <Btn onClick={()=>name.trim()&&onAdd(name.trim())} color="#6b5b95" label="新增" />
@@ -576,9 +713,8 @@ function AnnounceModal({ announcements, onClose, onSave }) {
   const [form, setForm]       = useState({title:"",content:""});
   const startEdit = idx => { setEditIdx(idx); setForm(idx===-1?{title:"",content:""}:{...list[idx]}); };
   const saveEdit  = () => {
-    if (!form.title.trim()) return;
-    const nl=[...list];
-    if(editIdx===-1) nl.push({...form}); else nl[editIdx]={...form};
+    if(!form.title.trim()) return;
+    const nl=[...list]; if(editIdx===-1) nl.push({...form}); else nl[editIdx]={...form};
     setList(nl); setEditIdx(null);
   };
   return (
@@ -677,18 +813,14 @@ function ActionBtn({ onClick, icon, label, color }) {
   );
 }
 function Btn({ onClick, color, label }) {
-  return (
-    <button onClick={onClick} style={{flex:1,padding:"10px 0",borderRadius:8,border:"none",background:color,color:"#e8dcc8",cursor:"pointer",fontSize:14,fontFamily:"sans-serif"}}>
-      {label}
-    </button>
-  );
+  return <button onClick={onClick} style={{flex:1,padding:"10px 0",borderRadius:8,border:"none",background:color,color:"#e8dcc8",cursor:"pointer",fontSize:14,fontFamily:"sans-serif"}}>{label}</button>;
 }
 function smallBtn(bg, color) {
   return {padding:"6px 14px",borderRadius:8,border:"none",background:bg,color,cursor:"pointer",fontSize:12,fontFamily:"sans-serif"};
 }
-const tinyBtn  = {padding:"3px 7px",borderRadius:5,border:"none",cursor:"pointer",fontSize:12,background:"#2a2a3a",color:"#e8dcc8"};
-const iStyle   = {width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #3a3050",background:"#0d1014",color:"#e8dcc8",fontSize:14,fontFamily:"sans-serif",boxSizing:"border-box",outline:"none",display:"block"};
-const lStyle   = {display:"block",color:"#a09080",fontFamily:"sans-serif",fontSize:12,marginBottom:5};
+const tinyBtn = {padding:"3px 7px",borderRadius:5,border:"none",cursor:"pointer",fontSize:12,background:"#2a2a3a",color:"#e8dcc8"};
+const iStyle  = {width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #3a3050",background:"#0d1014",color:"#e8dcc8",fontSize:14,fontFamily:"sans-serif",boxSizing:"border-box",outline:"none",display:"block"};
+const lStyle  = {display:"block",color:"#a09080",fontFamily:"sans-serif",fontSize:12,marginBottom:5};
 
 // ===================== MOUNT =====================
 const root = ReactDOM.createRoot(document.getElementById("root"));
