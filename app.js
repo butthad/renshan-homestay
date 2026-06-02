@@ -1,4 +1,3 @@
-// 等 Firebase 初始化完成才執行
 function startApp() {
 
 // ===================== STORAGE (Firebase) =====================
@@ -6,41 +5,70 @@ async function load(key, fallback) {
   try {
     const val = await window.__fbGet("renshan/" + key);
     return val !== null ? val : fallback;
-  } catch(e) {
-    console.error("load error", e);
-    return fallback;
-  }
+  } catch(e) { return fallback; }
 }
 async function save(key, value) {
-  try {
-    await window.__fbSet("renshan/" + key, value);
-  } catch(e) {
-    console.error("save error", e);
-  }
+  try { await window.__fbSet("renshan/" + key, value); } catch(e) { console.error(e); }
 }
 
 // ===================== CONSTANTS =====================
 const PASSWORD_HASH = "aed9e955f35f371272a0fcd55fd4ae779e2ea63e1a589547b748d6317b41030f";
 const FLOORS = [
-  { label: "1F", rooms: ["101"] },
-  { label: "2F", rooms: ["201", "202"] },
-  { label: "3F", rooms: ["301", "302"] },
-  { label: "4F", rooms: ["401", "402"] },
+  { label: "A", rooms: ["A01"] },
+  { label: "B", rooms: ["B01", "B02"] },
+  { label: "C", rooms: ["C01", "C02"] },
+  { label: "D", rooms: ["D01", "D02"] },
 ];
 const ROOMS = FLOORS.flatMap(f => f.rooms);
-const ROOM_TYPES = { 2: "雙人房", 3: "三人房", 4: "四人房" };
+const ROOM_TYPES = { 2: "雙人房", 3: "三人房", 4: "四人房", 5: "五人房" };
 const FLOOR_COLORS = {
-  "1": { bg:"#1e2e1e", border:"#2e4a2e", accent:"#4a8a4a" },
-  "2": { bg:"#1e1e2e", border:"#2e2e4a", accent:"#5a5aaa" },
-  "3": { bg:"#2e1e1e", border:"#4a2e2e", accent:"#aa5a5a" },
-  "4": { bg:"#2a2214", border:"#4a3a1e", accent:"#aa8a3a" },
+  "A": { bg:"#1e2e1e", border:"#2e4a2e", accent:"#4a8a4a" },
+  "B": { bg:"#1e1e2e", border:"#2e2e4a", accent:"#5a5aaa" },
+  "C": { bg:"#2e1e1e", border:"#4a2e2e", accent:"#aa5a5a" },
+  "D": { bg:"#2a2214", border:"#4a3a1e", accent:"#aa8a3a" },
 };
+
+// 舊房號 → 新房號 對照表（自動搬移用）
+const ROOM_MIGRATION = {
+  "101":"A01","201":"B01","202":"B02",
+  "301":"C01","302":"C02","401":"D01","402":"D02"
+};
+
 const defaultAssignments = Object.fromEntries(ROOMS.map(r => [r, []]));
 const defaultRoomConfig  = Object.fromEntries(ROOMS.map(r => [r, 2]));
+const defaultRoomPasswords = Object.fromEntries(ROOMS.map(r => [r, ""]));
 
 async function sha256(msg) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
   return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+}
+
+// ===================== 自動搬移舊資料 =====================
+async function migrateIfNeeded(assignments) {
+  // 檢查是否有任何舊 key 存在
+  const hasOldKeys = Object.keys(ROOM_MIGRATION).some(oldKey => assignments[oldKey] !== undefined);
+  if (!hasOldKeys) return assignments;
+
+  console.log("偵測到舊房號資料，自動搬移中…");
+  const migrated = { ...defaultAssignments };
+
+  // 把舊 key 的資料搬到新 key
+  for (const [oldKey, newKey] of Object.entries(ROOM_MIGRATION)) {
+    if (assignments[oldKey] && assignments[oldKey].length > 0) {
+      migrated[newKey] = assignments[oldKey];
+    }
+  }
+  // 保留已經是新 key 的資料
+  for (const room of ROOMS) {
+    if (assignments[room] && assignments[room].length > 0) {
+      migrated[room] = assignments[room];
+    }
+  }
+
+  // 存回 Firebase
+  await save("assignments", migrated);
+  console.log("搬移完成");
+  return migrated;
 }
 
 // ===================== HOOKS =====================
@@ -48,36 +76,41 @@ const { useState, useEffect } = React;
 
 // ===================== MAIN APP =====================
 function App() {
-  const [isAdmin, setIsAdmin]             = useState(false);
-  const [showLogin, setShowLogin]         = useState(false);
-  const [guests, setGuests]               = useState([]);
-  const [assignments, setAssignments]     = useState(defaultAssignments);
-  const [roomConfig, setRoomConfig]       = useState(defaultRoomConfig);
-  const [announcements, setAnnouncements] = useState([]);
-  const [loading, setLoading]             = useState(true);
-  const [dragging, setDragging]           = useState(null);
-  const [dragOver, setDragOver]           = useState(null);
-  const [toast, setToast]                 = useState(null);
+  const [isAdmin, setIsAdmin]               = useState(false);
+  const [showLogin, setShowLogin]           = useState(false);
+  const [guests, setGuests]                 = useState([]);
+  const [assignments, setAssignments]       = useState(defaultAssignments);
+  const [roomConfig, setRoomConfig]         = useState(defaultRoomConfig);
+  const [roomPasswords, setRoomPasswords]   = useState(defaultRoomPasswords);
+  const [announcements, setAnnouncements]   = useState([]);
+  const [loading, setLoading]               = useState(true);
+  const [dragging, setDragging]             = useState(null);
+  const [dragOver, setDragOver]             = useState(null);
+  const [toast, setToast]                   = useState(null);
 
   useEffect(() => {
     (async () => {
-      const [g, a, rc, an] = await Promise.all([
+      const [g, a, rc, rp, an] = await Promise.all([
         load("guests", []),
         load("assignments", defaultAssignments),
         load("roomConfig", defaultRoomConfig),
+        load("roomPasswords", defaultRoomPasswords),
         load("announcements", []),
       ]);
-      setGuests(g); setAssignments(a); setRoomConfig(rc); setAnnouncements(an);
+      const migratedA = await migrateIfNeeded(a);
+      setGuests(g); setAssignments(migratedA); setRoomConfig(rc);
+      setRoomPasswords(rp); setAnnouncements(an);
       setLoading(false);
     })();
   }, []);
 
   const toast_ = (msg, type="ok") => { setToast({msg,type}); setTimeout(()=>setToast(null),2400); };
 
-  const upGuests   = async g  => { setGuests(g);         await save("guests", g); };
-  const upAssign   = async a  => { setAssignments(a);    await save("assignments", a); };
-  const upRoomCfg  = async rc => { setRoomConfig(rc);    await save("roomConfig", rc); };
-  const upAnnounce = async an => { setAnnouncements(an); await save("announcements", an); };
+  const upGuests        = async g  => { setGuests(g);          await save("guests", g); };
+  const upAssign        = async a  => { setAssignments(a);     await save("assignments", a); };
+  const upRoomCfg       = async rc => { setRoomConfig(rc);     await save("roomConfig", rc); };
+  const upRoomPasswords = async rp => { setRoomPasswords(rp);  await save("roomPasswords", rp); };
+  const upAnnounce      = async an => { setAnnouncements(an);  await save("announcements", an); };
 
   const assignedIds = new Set(Object.values(assignments).flat());
   const unassigned  = guests.filter(g => !assignedIds.has(g.id));
@@ -114,6 +147,10 @@ function App() {
     await upGuests(guests.filter(g => g.id !== id));
     toast_("已刪除住客");
   };
+  const updateRoomPassword = async (room, pw) => {
+    const nrp = { ...roomPasswords, [room]: pw };
+    await upRoomPasswords(nrp);
+  };
 
   if (loading) return (
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0d1014",color:"#e8dcc8",fontSize:18}}>
@@ -143,13 +180,13 @@ function App() {
       )}
       <Board
         isAdmin={isAdmin} guests={guests} assignments={assignments}
-        roomConfig={roomConfig} announcements={announcements}
+        roomConfig={roomConfig} roomPasswords={roomPasswords} announcements={announcements}
         unassigned={unassigned} dragging={dragging} dragOver={dragOver}
         setDragOver={setDragOver} onDragStart={onDragStart}
         onDrop={onDrop} onDropUnassigned={onDropUnassigned}
         togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest}
         upGuests={upGuests} upRoomCfg={upRoomCfg} upAnnounce={upAnnounce}
-        toast_={toast_}
+        updateRoomPassword={updateRoomPassword} toast_={toast_}
         onAdminLogin={() => setShowLogin(true)}
         onAdminLogout={() => { setIsAdmin(false); toast_("已登出"); }}
       />
@@ -184,10 +221,10 @@ function LoginModal({ onLogin, onClose }) {
 }
 
 // ===================== BOARD =====================
-function Board({ isAdmin, guests, assignments, roomConfig, announcements,
+function Board({ isAdmin, guests, assignments, roomConfig, roomPasswords, announcements,
   unassigned, dragging, dragOver, setDragOver, onDragStart, onDrop, onDropUnassigned,
-  togglePay, deleteGuest, renameGuest, upGuests, upRoomCfg, upAnnounce, toast_,
-  onAdminLogin, onAdminLogout }) {
+  togglePay, deleteGuest, renameGuest, upGuests, upRoomCfg, upAnnounce,
+  updateRoomPassword, toast_, onAdminLogin, onAdminLogout }) {
   const [showAddGuest, setShowAddGuest] = useState(false);
   const [showAnnounce, setShowAnnounce] = useState(false);
   const [showRoomCfg,  setShowRoomCfg]  = useState(false);
@@ -214,15 +251,18 @@ function Board({ isAdmin, guests, assignments, roomConfig, announcements,
       <UnassignedPool
         guests={unassigned} isAdmin={isAdmin} dragging={dragging} dragOver={dragOver}
         setDragOver={setDragOver} onDragStart={onDragStart}
-        onDropUnassigned={onDropUnassigned} togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest}
+        onDropUnassigned={onDropUnassigned} togglePay={togglePay}
+        deleteGuest={deleteGuest} renameGuest={renameGuest}
       />
       <div style={{display:"flex",flexDirection:"column",gap:10}}>
         {FLOORS.map(floor => (
           <FloorRow key={floor.label} floor={floor}
             assignments={assignments} guests={guests} roomConfig={roomConfig}
-            isAdmin={isAdmin} dragging={dragging} dragOver={dragOver}
-            setDragOver={setDragOver} onDragStart={onDragStart} onDrop={onDrop}
+            roomPasswords={roomPasswords} isAdmin={isAdmin}
+            dragging={dragging} dragOver={dragOver} setDragOver={setDragOver}
+            onDragStart={onDragStart} onDrop={onDrop}
             togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest}
+            updateRoomPassword={updateRoomPassword}
           />
         ))}
       </div>
@@ -246,9 +286,10 @@ function Board({ isAdmin, guests, assignments, roomConfig, announcements,
 }
 
 // ===================== FLOOR ROW =====================
-function FloorRow({ floor, assignments, guests, roomConfig, isAdmin,
-  dragging, dragOver, setDragOver, onDragStart, onDrop, togglePay, deleteGuest, renameGuest }) {
-  const fc = FLOOR_COLORS[floor.label[0]] || FLOOR_COLORS["1"];
+function FloorRow({ floor, assignments, guests, roomConfig, roomPasswords, isAdmin,
+  dragging, dragOver, setDragOver, onDragStart, onDrop,
+  togglePay, deleteGuest, renameGuest, updateRoomPassword }) {
+  const fc = FLOOR_COLORS[floor.label] || FLOOR_COLORS["A"];
   return (
     <div style={{background:fc.bg,border:`1px solid ${fc.border}`,borderRadius:12,overflow:"hidden"}}>
       <div style={{padding:"6px 12px",borderBottom:`1px solid ${fc.border}`,display:"flex",alignItems:"center",gap:8}}>
@@ -259,10 +300,12 @@ function FloorRow({ floor, assignments, guests, roomConfig, isAdmin,
         {floor.rooms.map((room,i) => (
           <RoomCard key={room} room={room}
             capacity={roomConfig[room]||2} guestIds={assignments[room]||[]}
+            password={roomPasswords[room]||""}
             guests={guests} isAdmin={isAdmin}
             dragging={dragging} dragOver={dragOver} setDragOver={setDragOver}
             onDragStart={onDragStart} onDrop={onDrop}
             togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest}
+            updateRoomPassword={updateRoomPassword}
             borderLeft={i>0} />
         ))}
       </div>
@@ -271,12 +314,20 @@ function FloorRow({ floor, assignments, guests, roomConfig, isAdmin,
 }
 
 // ===================== ROOM CARD =====================
-function RoomCard({ room, capacity, guestIds, guests, isAdmin,
+function RoomCard({ room, capacity, guestIds, guests, password, isAdmin,
   dragging, dragOver, setDragOver, onDragStart, onDrop,
-  togglePay, deleteGuest, renameGuest, borderLeft }) {
-  const roomGuests = guestIds.map(id => guests.find(g=>g.id===id)).filter(Boolean);
-  const isFull   = roomGuests.length >= capacity;
-  const isTarget = dragOver === `room_${room}`;
+  togglePay, deleteGuest, renameGuest, updateRoomPassword, borderLeft }) {
+  const roomGuests  = guestIds.map(id => guests.find(g=>g.id===id)).filter(Boolean);
+  const isFull      = roomGuests.length >= capacity;
+  const isTarget    = dragOver === `room_${room}`;
+  const [editingPw, setEditingPw] = useState(false);
+  const [pwDraft,   setPwDraft]   = useState(password);
+
+  const savePw = async () => {
+    await updateRoomPassword(room, pwDraft.trim());
+    setEditingPw(false);
+  };
+
   return (
     <div
       onDragOver={e=>{ if(isAdmin){e.preventDefault();setDragOver(`room_${room}`);}}}
@@ -285,7 +336,9 @@ function RoomCard({ room, capacity, guestIds, guests, isAdmin,
       style={{padding:10,minHeight:90,boxSizing:"border-box",
         borderLeft:borderLeft?"1px solid rgba(255,255,255,0.06)":"none",
         background:isTarget?"rgba(107,91,149,0.2)":"transparent",transition:"background 0.15s"}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:7}}>
+
+      {/* 房號 + 人數 */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
         <div style={{display:"flex",alignItems:"center",gap:6}}>
           <span style={{fontFamily:"sans-serif",fontWeight:700,fontSize:15,color:"#e8dcc8"}}>{room}</span>
           <span style={{fontFamily:"sans-serif",fontSize:10,color:"#6a5a7a",background:"rgba(0,0,0,0.3)",padding:"1px 6px",borderRadius:8}}>
@@ -296,10 +349,48 @@ function RoomCard({ room, capacity, guestIds, guests, isAdmin,
           {roomGuests.length}/{capacity}
         </span>
       </div>
+
+      {/* 房間密碼（僅管理員可見） */}
+      {isAdmin && (
+        <div style={{marginBottom:7}}>
+          {editingPw ? (
+            <div style={{display:"flex",gap:4,alignItems:"center"}}>
+              <input
+                autoFocus value={pwDraft}
+                onChange={e=>setPwDraft(e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter") savePw(); if(e.key==="Escape") setEditingPw(false); }}
+                placeholder="房間密碼"
+                style={{flex:1,padding:"3px 7px",borderRadius:5,border:"1px solid #3a3050",
+                  background:"#0d1014",color:"#e8dcc8",fontSize:11,fontFamily:"sans-serif",outline:"none"}}
+              />
+              <button onClick={savePw}
+                style={{...tinyBtn,background:"#2a4a2a",color:"#5ae05a",fontSize:10}}>✓</button>
+              <button onClick={()=>setEditingPw(false)}
+                style={{...tinyBtn,background:"#2a2a3a",fontSize:10}}>✕</button>
+            </div>
+          ) : (
+            <div onClick={()=>{ setPwDraft(password); setEditingPw(true); }}
+              style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer",
+                padding:"2px 6px",borderRadius:5,border:"1px dashed #2a2a3a",
+                background:"rgba(0,0,0,0.2)"}}>
+              <span style={{fontSize:10,color:"#5a4a6a",fontFamily:"sans-serif"}}>🔒</span>
+              <span style={{fontFamily:"sans-serif",fontSize:11,
+                color: password ? "#9080c0" : "#3a2a4a",
+                fontStyle: password ? "normal" : "italic"}}>
+                {password || "點擊設定密碼"}
+              </span>
+              {password && <span style={{fontSize:9,color:"#4a3a5a",fontFamily:"sans-serif",marginLeft:"auto"}}>✏️</span>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 住客列表 */}
       <div style={{display:"flex",flexDirection:"column",gap:5}}>
         {roomGuests.map(g => (
           <GuestCard key={g.id} guest={g} isAdmin={isAdmin} fromRoom={room}
-            onDragStart={onDragStart} togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest} />
+            onDragStart={onDragStart} togglePay={togglePay}
+            deleteGuest={deleteGuest} renameGuest={renameGuest} />
         ))}
         {roomGuests.length===0 && (
           <div style={{textAlign:"center",color:"#2e2e3e",fontFamily:"sans-serif",fontSize:12,padding:"8px 0"}}>
@@ -334,7 +425,8 @@ function UnassignedPool({ guests, isAdmin, dragging, dragOver, setDragOver,
         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
           {guests.map(g => (
             <GuestCard key={g.id} guest={g} isAdmin={isAdmin} fromRoom={null}
-              onDragStart={onDragStart} togglePay={togglePay} deleteGuest={deleteGuest} renameGuest={renameGuest} inline />
+              onDragStart={onDragStart} togglePay={togglePay}
+              deleteGuest={deleteGuest} renameGuest={renameGuest} inline />
           ))}
         </div>
       )}
@@ -540,7 +632,7 @@ function RoomCfgModal({ roomConfig, onClose, onSave }) {
             <div key={room} style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
               <span style={{fontFamily:"sans-serif",color:"#c0b0a0",fontSize:13}}>房間 {room}</span>
               <div style={{display:"flex",gap:5}}>
-                {[2,3,4].map(n=>(
+                {[2,3,4,5].map(n=>(
                   <button key={n} onClick={()=>setCfg(c=>({...c,[room]:n}))} style={{
                     padding:"4px 10px",borderRadius:6,border:"none",cursor:"pointer",fontSize:12,
                     background:cfg[room]===n?"#6b5b95":"#2a2a3a",color:cfg[room]===n?"#fff":"#a09080",fontFamily:"sans-serif"
@@ -594,9 +686,9 @@ function Btn({ onClick, color, label }) {
 function smallBtn(bg, color) {
   return {padding:"6px 14px",borderRadius:8,border:"none",background:bg,color,cursor:"pointer",fontSize:12,fontFamily:"sans-serif"};
 }
-const tinyBtn = {padding:"3px 7px",borderRadius:5,border:"none",cursor:"pointer",fontSize:12,background:"#2a2a3a",color:"#e8dcc8"};
-const iStyle  = {width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #3a3050",background:"#0d1014",color:"#e8dcc8",fontSize:14,fontFamily:"sans-serif",boxSizing:"border-box",outline:"none",display:"block"};
-const lStyle  = {display:"block",color:"#a09080",fontFamily:"sans-serif",fontSize:12,marginBottom:5};
+const tinyBtn  = {padding:"3px 7px",borderRadius:5,border:"none",cursor:"pointer",fontSize:12,background:"#2a2a3a",color:"#e8dcc8"};
+const iStyle   = {width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #3a3050",background:"#0d1014",color:"#e8dcc8",fontSize:14,fontFamily:"sans-serif",boxSizing:"border-box",outline:"none",display:"block"};
+const lStyle   = {display:"block",color:"#a09080",fontFamily:"sans-serif",fontSize:12,marginBottom:5};
 
 // ===================== MOUNT =====================
 const root = ReactDOM.createRoot(document.getElementById("root"));
@@ -604,7 +696,6 @@ root.render(<App />);
 
 } // end startApp
 
-// 等 Firebase 準備好才執行
 if (window.__firebaseReady) {
   startApp();
 } else {
